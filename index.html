@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="hi">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>A–Z Drum Pad — Drum Machine</title>
+<style>
+  :root{
+    --bg:#0f1724; --card:#0b1220; --accent:#ff5e57; --muted:#94a3b8;
+    --glass: rgba(255,255,255,0.04);
+  }
+  body{
+    margin:0; font-family:Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+    background: linear-gradient(180deg,#071129 0%, #0f1724 60%);
+    color:#e6eef8; -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
+    display:flex; flex-direction:column; align-items:center; min-height:100vh; padding:28px;
+  }
+  h1{ margin:0 0 12px; font-size:20px; letter-spacing:0.6px; color:var(--accent)}
+  p.lead{ margin:0 0 20px; color:var(--muted) }
+  .controls{ display:flex; gap:12px; align-items:center; margin-bottom:18px; flex-wrap:wrap; }
+  .knob{ display:flex; gap:8px; align-items:center; background:var(--card); padding:8px 12px; border-radius:10px; box-shadow: 0 6px 18px rgba(2,6,23,0.6);}
+  label{ font-size:13px; color:var(--muted); }
+  input[type=range]{ accent-color:var(--accent); }
+  .grid{
+    display:grid; grid-template-columns: repeat(7, minmax(48px,1fr)); gap:10px; width:100%; max-width:980px;
+  }
+  .key{
+    background:linear-gradient(180deg,var(--glass), rgba(255,255,255,0.02));
+    border:1px solid rgba(255,255,255,0.04);
+    padding:12px; border-radius:10px; text-align:center; cursor:pointer; user-select:none;
+    transition: transform .08s ease, box-shadow .08s ease;
+    box-shadow: 0 4px 12px rgba(2,6,23,0.6);
+  }
+  .key:active, .key.playing{ transform:translateY(-6px) scale(1.02); box-shadow: 0 10px 28px rgba(0,0,0,0.6); border-color: rgba(255,255,255,0.06) }
+  .key .letter{ font-weight:700; font-size:16px; color:#e6eef8; display:block; }
+  .key .label{ font-size:12px; color:var(--muted); margin-top:6px; }
+  footer{ margin-top:18px; color:var(--muted); font-size:13px; }
+  @media (max-width:640px){
+    .grid{ grid-template-columns: repeat(4, minmax(48px,1fr)); }
+  }
+</style>
+</head>
+<body>
+  <h1>DHRUV Drum Pad</h1>
+  <p class="lead">हर की दबाइए (या क्लिक कीजिए) — अलग-अलग ड्रम / पर्कशन की धुन बनेगी। बेहतर नियंत्रण के लिए volume और tone adjust करें.</p>
+
+  <div class="controls">
+    <div class="knob">
+      <label for="volume">वॉल्यूम</label>
+      <input id="volume" type="range" min="0" max="1" step="0.01" value="0.9">
+    </div>
+    <div class="knob">
+      <label for="tone">टोन (ब्राइट → डार्क)</label>
+      <input id="tone" type="range" min="-1" max="1" step="0.01" value="0.0">
+    </div>
+    <div class="knob">
+      <label for="sustain">रिलीज़ (ms)</label>
+      <input id="sustain" type="range" min="30" max="1000" step="10" value="180">
+    </div>
+
+    <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--card);border-radius:10px">
+      <button id="unlock" style="background:var(--accent); color:white; border:0; padding:8px 12px; border-radius:8px; cursor:pointer">Start Audio</button>
+      <div style="font-size:12px;color:var(--muted)">पहली बार क्लिक करें ताकि ब्राउज़र ऑडियो अनलॉक हो जाए</div>
+    </div>
+  </div>
+
+  <div class="grid" id="pad">
+    <!-- Keys A-Z will be injected here -->
+  </div>
+
+  <footer>Tip: की-होल्ड करके भी धुन बजेगी — हर key का timbre अलग है।</footer>
+
+<script>
+/*
+  A–Z Drum Pad — synthesized via Web Audio API.
+  हर key के लिए अलग parameters दिए हैं (kick, snare, hats, toms, cymbal, fx...)
+*/
+
+const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split('');
+const labels = {
+  // short Hindi descriptions per key (creative mapping)
+  A:'Kick', B:'Snare', C:'Hi-Hat', D:'Tom1', E:'Tom2', F:'Clap', G:'Ride', H:'Perc', I:'Snap', J:'Low Kick',
+  K:'Cowbell', L:'Shaker', M:'Synth Hit', N:'Pop', O:'Fx', P:'Slash', Q:'Deep Tom', R:'Short Snare', S:'Closed Hat',
+  T:'Open Hat', U:'Tom Clap', V:'Metal Hit', W:'Boom', X:'Crash', Y:'Reverse', Z:'Glitch'
+};
+
+let audioCtx = null;
+let masterGain;
+let toneControl = 0;
+let sustainMs = 180;
+
+function ensureAudio(){
+  if (!audioCtx){
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    masterGain = audioCtx.createGain();
+    masterGain.gain.value = document.getElementById('volume').value;
+    masterGain.connect(audioCtx.destination);
+  }
+}
+
+document.getElementById('unlock').addEventListener('click', ()=>{
+  ensureAudio();
+  // resume if suspended
+  audioCtx.resume && audioCtx.resume();
+  document.getElementById('unlock').textContent = 'Audio Ready';
+  document.getElementById('unlock').disabled = true;
+});
+
+document.getElementById('volume').addEventListener('input', (e)=>{
+  if(masterGain) masterGain.gain.value = e.target.value;
+});
+document.getElementById('tone').addEventListener('input', (e)=>{
+  toneControl = parseFloat(e.target.value);
+});
+document.getElementById('sustain').addEventListener('input', (e)=>{
+  sustainMs = parseInt(e.target.value);
+});
+
+// Utility: create short noise buffer
+function createNoiseBuffer(){
+  const buf = audioCtx.createBuffer(1, audioCtx.sampleRate * 1.0, audioCtx.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i=0;i<data.length;i++){
+    data[i] = Math.random()*2-1;
+  }
+  return buf;
+}
+
+// Envelope helper
+function applyGainEnvelope(g, when, attack=0.001, decay=0.02, sustain=0.0, release=0.05, peak=1.0) {
+  g.cancelScheduledValues(when);
+  g.setValueAtTime(0.0001, when);
+  g.linearRampToValueAtTime(peak, when + attack);
+  g.linearRampToValueAtTime(sustain, when + attack + decay);
+  g.setValueAtTime(sustain, when + attack + decay);
+  // release will be scheduled by caller by calling linearRampToValueAtTime to 0
+}
+
+// Drum voices
+const voices = {
+  kick: (freq=60, length=0.5, pitchSweep=0.5, gain=1.0) => {
+    const now = audioCtx.currentTime;
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(freq * (1 + pitchSweep), now);
+    o.frequency.exponentialRampToValueAtTime(Math.max(30,freq), now + 0.06 + pitchSweep*0.08);
+    g.gain.setValueAtTime(gain, now);
+    applyGainEnvelope(g.gain, now, 0.001, length*0.4, 0.0001, 0.03, gain);
+    o.connect(g);
+    g.connect(masterGain);
+    o.start(now);
+    o.stop(now + length + 0.1);
+    // small click for attack
+    return;
+  },
+  snare: (gainVal=0.9, length=0.25, tone=0.5) => {
+    const now = audioCtx.currentTime;
+    // noise burst
+    const buf = createNoiseBuffer();
+    const noise = audioCtx.createBufferSource();
+    noise.buffer = buf;
+    const noiseFilter = audioCtx.createBiquadFilter();
+    noiseFilter.type = 'bandpass';
+    noiseFilter.frequency.value = 3000 + tone*5000;
+    const ng = audioCtx.createGain();
+    applyGainEnvelope(ng.gain, now, 0.001, length*0.6, 0.0001, 0.01, gainVal);
+    noise.connect(noiseFilter);
+    noiseFilter.connect(ng);
+    ng.connect(masterGain);
+    noise.start(now);
+    noise.stop(now + length);
+
+    // body (oscillator)
+    const o = audioCtx.createOscillator();
+    o.type = 'triangle';
+    o.frequency.setValueAtTime(180, now);
+    const og = audioCtx.createGain();
+    og.gain.setValueAtTime(gainVal*0.8, now);
+    applyGainEnvelope(og.gain, now, 0.002, length*0.6, 0.0001, 0.02, gainVal*0.8);
+    o.connect(og); og.connect(masterGain);
+    o.start(now); o.stop(now + length + 0.05);
+  },
+  hat: (open=false, gainVal=0.4, length=0.12) => {
+    const now = audioCtx.currentTime;
+    const buf = createNoiseBuffer();
+    const src = audioCtx.createBufferSource();
+    src.buffer = buf;
+    const hf = audioCtx.createBiquadFilter();
+    hf.type = 'highpass';
+    hf.frequency.value = 5000;
+    const g = audioCtx.createGain();
+    applyGainEnvelope(g.gain, now, 0.001, length*0.8, 0.0001, 0.001, gainVal);
+    if (open){
+      // longer release
+      applyGainEnvelope(g.gain, now, 0.001, length*0.8, 0.12, 0.05, gainVal);
+    }
+    src.connect(hf); hf.connect(g); g.connect(masterGain);
+    src.start(now); src.stop(now + (open?0.5:0.12));
+  },
+  perc: (freq=800, gainVal=0.5, length=0.18) => {
+    const now = audioCtx.currentTime;
+    const o = audioCtx.createOscillator();
+    o.type='square';
+    o.frequency.setValueAtTime(freq*2, now);
+    o.frequency.exponentialRampToValueAtTime(freq*0.6, now + 0.06);
+    const g = audioCtx.createGain();
+    applyGainEnvelope(g.gain, now, 0.001, length*0.6, 0.0001, 0.02, gainVal);
+    o.connect(g); g.connect(masterGain);
+    o.start(now); o.stop(now + length + 0.05);
+  },
+  metallic: (freq=1000, gainVal=0.6, length=0.35) => {
+    const now = audioCtx.currentTime;
+    const o = audioCtx.createOscillator();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(freq, now);
+    const fm = audioCtx.createOscillator();
+    fm.type='sine'; fm.frequency.setValueAtTime(600, now);
+    const fmGain = audioCtx.createGain();
+    fmGain.gain.value = 200;
+    fm.connect(fmGain);
+    const mod = audioCtx.createGain();
+    // Create an oscillator + wave-shaping chain for metallic timbre
+    const carrier = audioCtx.createOscillator();
+    carrier.type='sawtooth';
+    carrier.frequency.value = freq;
+    const carGain = audioCtx.createGain();
+    carGain.gain.value = gainVal * 0.002;
+    fmGain.connect(carGain.gain);
+    carrier.connect(carGain);
+    const g = audioCtx.createGain();
+    applyGainEnvelope(g.gain, now, 0.002, length*0.6, 0.0001, 0.02, gainVal);
+    carGain.connect(g); g.connect(masterGain);
+    carrier.start(now); carrier.stop(now + length + 0.05);
+    fm.start(now); fm.stop(now + length + 0.05);
+  },
+  fxReverse: (gainVal=0.6, length=0.6) => {
+    // quick reversed noise/gated feel (approx)
+    const now = audioCtx.currentTime;
+    const buf = createNoiseBuffer();
+    const src = audioCtx.createBufferSource();
+    src.buffer = buf;
+    // To simulate reverse sweep, we sweep a filter up while ramping gain
+    const bp = audioCtx.createBiquadFilter();
+    bp.type='lowpass';
+    bp.frequency.setValueAtTime(1000, now);
+    bp.frequency.exponentialRampToValueAtTime(12000, now + length);
+    const g = audioCtx.createGain();
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.linearRampToValueAtTime(gainVal, now + length*0.9);
+    g.gain.linearRampToValueAtTime(0.0001, now + length + 0.02);
+    src.connect(bp); bp.connect(g); g.connect(masterGain);
+    src.start(now); src.stop(now + length + 0.05);
+  }
+};
+
+// Map each letter to a voice call with creative params
+function playForLetter(letter){
+  if (!audioCtx) return;
+  const L = letter.toUpperCase();
+  const t = audioCtx.currentTime;
+  const tone = toneControl; // -1..1
+
+  switch(L){
+    case 'A': voices.kick(60 + (tone*50), 0.5, 0.8, 1.0); break;
+    case 'B': voices.snare(0.9, 0.25, 0.3); break;
+    case 'C': voices.hat(false, 0.28, 0.12); break;
+    case 'D': voices.kick(100 + tone*30, 0.28, 0.45, 0.9); break;
+    case 'E': voices.perc(450 + tone*200, 0.6, 0.16); break;
+    case 'F': voices.snare(0.85, 0.28, 0.45); break;
+    case 'G': voices.metallic(1400 + tone*400, 0.6, 0.35); break;
+    case 'H': voices.hat(true, 0.5, 0.45); break;
+    case 'I': voices.perc(900, 0.35, 0.12); break;
+    case 'J': voices.kick(45, 0.7, 0.9, 1.0); break;
+    case 'K': voices.perc(1200, 0.45, 0.09); break;
+    case 'L': voices.hat(false, 0.18, 0.08); break;
+    case 'M': voices.metallic(900 + tone*300, 0.7, 0.28); break;
+    case 'N': voices.snare(0.7, 0.22, 0.2); break;
+    case 'O': voices.fxReverse(0.6, 0.55); break;
+    case 'P': voices.perc(700, 0.65, 0.14); break;
+    case 'Q': voices.kick(80, 0.4, 0.6, 0.9); break;
+    case 'R': voices.snare(0.9, 0.2, 0.6); break;
+    case 'S': voices.hat(false, 0.25, 0.06); break;
+    case 'T': voices.hat(true, 0.45, 0.32); break;
+    case 'U': voices.perc(520, 0.6, 0.16); break;
+    case 'V': voices.metallic(2000, 0.7, 0.38); break;
+    case 'W': voices.kick(55, 0.6, 0.8, 1.0); break;
+    case 'X': voices.metallic(1200, 0.75, 0.32); break;
+    case 'Y': voices.fxReverse(0.5, 0.48); break;
+    case 'Z': voices.perc(1800, 0.5, 0.12); break;
+    default: voices.perc(800, 0.5, 0.15);
+  }
+}
+
+// Build UI
+const pad = document.getElementById('pad');
+letters.forEach(l => {
+  const div = document.createElement('div');
+  div.className='key';
+  div.dataset.letter = l;
+  div.innerHTML = `<span class="letter">${l}</span><span class="label">${labels[l]||''}</span>`;
+  div.addEventListener('mousedown', (e)=>{
+    ensureAudio();
+    div.classList.add('playing');
+    playForLetter(l);
+  });
+  div.addEventListener('mouseup', ()=> div.classList.remove('playing'));
+  div.addEventListener('mouseleave', ()=> div.classList.remove('playing'));
+  // support touch
+  div.addEventListener('touchstart', (e)=>{
+    ensureAudio();
+    e.preventDefault();
+    div.classList.add('playing');
+    playForLetter(l);
+  }, {passive:false});
+  div.addEventListener('touchend', ()=> div.classList.remove('playing'));
+  pad.appendChild(div);
+});
+
+// keyboard
+const activeSet = new Set();
+window.addEventListener('keydown', (e)=>{
+  if (!e.key) return;
+  const k = e.key.toUpperCase();
+  if (letters.includes(k) && !activeSet.has(k)){
+    activeSet.add(k);
+    const el = document.querySelector(`.key[data-letter="${k}"]`);
+    if(el) el.classList.add('playing');
+    ensureAudio();
+    sustainMs = parseInt(document.getElementById('sustain').value);
+    // trigger note
+    playForLetter(k);
+  }
+});
+window.addEventListener('keyup', (e)=>{
+  const k = (e.key||'').toUpperCase();
+  if (letters.includes(k)){
+    activeSet.delete(k);
+    const el = document.querySelector(`.key[data-letter="${k}"]`);
+    if(el) el.classList.remove('playing');
+  }
+});
+
+// Prevent selection during long press
+window.addEventListener('selectstart', e => { if (e.target.closest('.grid')) e.preventDefault(); });
+
+</script>
+</body>
+</html>
